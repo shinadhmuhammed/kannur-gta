@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Kannur Game</title>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
+      canvas { display: block; }
+      /* The HUD is plain HTML drawn on top of the 3D canvas. */
+      #hud {
+        position: fixed; left: 16px; bottom: 16px;
+        font: 600 28px system-ui, sans-serif; color: #fff;
+        text-shadow: 0 1px 4px rgba(0, 0, 0, 0.7);
+      }
+      #hud small { font-size: 14px; font-weight: 400; opacity: 0.85; }
+      #place { font-size: 14px; font-weight: 400; opacity: 0.9; min-height: 18px; }
+      #minimap {
+        position: fixed; right: 16px; top: 16px; width: 180px; height: 180px;
+        border-radius: 50%; border: 3px solid rgba(255, 255, 255, 0.9);
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+      }
+      #help { max-width: calc(100vw - 250px); }
+      #road { font-size: 16px; font-weight: 500; min-height: 20px; }
+      #credit {
+        position: fixed; right: 8px; bottom: 6px;
+        font: 11px system-ui, sans-serif; color: #fff; opacity: 0.8;
+        text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+      }
+      #hint {
+        position: fixed; left: 50%; bottom: 80px; transform: translateX(-50%);
+        font: 600 16px system-ui, sans-serif; color: #fff;
+        background: rgba(0, 0, 0, 0.55); padding: 8px 14px; border-radius: 8px;
+      }
+      #hint:empty { display: none; }
+      #help {
+        position: fixed; left: 16px; top: 16px;
+        font: 14px system-ui, sans-serif; color: #fff;
+        background: rgba(0, 0, 0, 0.45); padding: 8px 12px; border-radius: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="help">W / ↑ forward · S / ↓ brake, back · A D / ← → steer · Space handbrake · Shift run · E get in / out · R reset</div>
+    <div id="hint"></div>
+    <!-- 360 pixels shown at 180: sharp on high-resolution (Retina) screens. -->
+    <canvas id="minimap" width="360" height="360"></canvas>
+    <div id="hud">
+      <div id="place"></div>
+      <div id="road"></div>
+      <span id="speed">0</span> <small>km/h</small>
+    </div>
+    <!-- OpenStreetMap's licence requires showing this credit. -->
+    <div id="credit"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
