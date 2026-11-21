@@ -1,11 +1,14 @@
 import * as THREE from "three";
 import { pointInOutline } from "./mapData";
+import { MeshPart } from "./meshPart";
+import { concreteTexture, tileTexture, wallTexture } from "./textures";
 
 // Builds every building in the map as a simple box-like shape: the outline
 // from OpenStreetMap pushed straight up to the building's height, with a tiled
 // sloping roof on houses and a flat roof on bigger buildings. All 12,000+
-// buildings go into ONE mesh (see the note in ribbon.ts on
-// why), and each gets its colour through "vertex colours".
+// buildings go into just THREE meshes (see the note in ribbon.ts on why):
+// walls, tiled roofs and flat roofs, one per texture. Each building still
+// gets its own paint through "vertex colours".
 
 interface Building {
   height: number; // metres
@@ -21,6 +24,8 @@ const WALLS = [0xf2ead8, 0xe8d9b5, 0xf6f1e7, 0xd5e3ec, 0xf0d0b8, 0xe3e8c9, 0xf3d
 const TILE_ROOF = 0xb5523b; // Mangalore clay tiles, for houses
 const CONCRETE_ROOF = 0x9d9c96; // for big buildings
 const BIG = 250; // m². Larger than this counts as a big building.
+const FLOOR = 3.2; // metres. The wall texture is one floor tall ...
+const BAY = 3.4; // ... and one window wide.
 
 // For collisions we must find the buildings near the car quickly. Checking
 // all 12,000 every frame is wasteful, so the map is cut into square cells and
@@ -29,23 +34,14 @@ const CELL = 40; // metres
 const cellKey = (x: number, z: number) => `${Math.floor(x / CELL)},${Math.floor(z / CELL)}`;
 
 export class Buildings {
-  readonly mesh: THREE.Mesh;
+  readonly mesh = new THREE.Group();
   private readonly cells = new Map<string, Building[]>();
 
   constructor(data: BuildingData) {
-    const positions: number[] = [];
-    const normals: number[] = [];
-    const colours: number[] = [];
-    const indices: number[] = [];
+    const walls = new MeshPart();
+    const tileRoofs = new MeshPart();
+    const flatRoofs = new MeshPart();
     const colour = new THREE.Color();
-
-    /** Add one corner point and return its number. */
-    const vertex = (x: number, y: number, z: number, nx: number, ny: number, nz: number): number => {
-      positions.push(x, y, z);
-      normals.push(nx, ny, nz); // which way the surface faces, for lighting
-      colours.push(colour.r, colour.g, colour.b);
-      return positions.length / 3 - 1;
-    };
 
     data.buildings.forEach((building, n) => {
       const h = building.height;
@@ -64,11 +60,17 @@ export class Buildings {
         const len = Math.hypot(x2 - x1, z2 - z1) || 1;
         const nx = (z2 - z1) / len; // the edge turned 90 degrees = facing out
         const nz = -(x2 - x1) / len;
-        const a = vertex(x1, 0, z1, nx, 0, nz); // bottom corners
-        const b = vertex(x2, 0, z2, nx, 0, nz);
-        const c = vertex(x2, h, z2, nx, 0, nz); // top corners
-        const d = vertex(x1, h, z1, nx, 0, nz);
-        indices.push(a, c, b, a, d, c); // two triangles make the rectangle
+        // Texture positions. Across: one picture per BAY metres, placed so a
+        // window sits in the middle of the wall. Up: one picture per floor.
+        const u1 = 0.5 - len / BAY / 2;
+        const u2 = 0.5 + len / BAY / 2;
+        const top = h / FLOOR;
+        const a = walls.vertex(x1, 0, z1, nx, 0, nz, colour, u1, 0); // bottom corners
+        const b = walls.vertex(x2, 0, z2, nx, 0, nz, colour, u2, 0);
+        const c = walls.vertex(x2, h, z2, nx, 0, nz, colour, u2, top); // top corners
+        const d = walls.vertex(x1, h, z1, nx, 0, nz, colour, u1, top);
+        walls.triangle(a, c, b); // two triangles make the rectangle
+        walls.triangle(a, d, c);
       }
 
       // --- Roof ---------------------------------------------------------------
@@ -97,37 +99,33 @@ export class Buildings {
           const flip = ny < 0; // make sure the roof faces the sky
           if (flip) { nx = -nx; ny = -ny; nz = -nz; }
           const len = Math.hypot(nx, ny, nz) || 1;
-          const va = vertex(a.x, h, a.y, nx / len, ny / len, nz / len);
-          const vb = vertex(b.x, h, b.y, nx / len, ny / len, nz / len);
-          const top = vertex(midX, peak, midZ, nx / len, ny / len, nz / len);
-          if (flip) indices.push(va, vb, top);
-          else indices.push(va, top, vb);
+          // Roof textures are laid on by map position: 2.5 m of roof per
+          // picture, seen from above.
+          const T = 2.5;
+          const va = tileRoofs.vertex(a.x, h, a.y, nx / len, ny / len, nz / len, colour, a.x / T, a.y / T);
+          const vb = tileRoofs.vertex(b.x, h, b.y, nx / len, ny / len, nz / len, colour, b.x / T, b.y / T);
+          const top = tileRoofs.vertex(midX, peak, midZ, nx / len, ny / len, nz / len, colour, midX / T, midZ / T);
+          if (flip) tileRoofs.triangle(va, vb, top);
+          else tileRoofs.triangle(va, top, vb);
         }
       } else {
         // A flat concrete roof: the outline itself, cut into triangles.
         colour.setHex(CONCRETE_ROOF);
-        const first = positions.length / 3;
-        for (const corner of corners) vertex(corner.x, h, corner.y, 0, 1, 0);
+        const first = flatRoofs.vertexCount;
+        for (const corner of corners) flatRoofs.vertex(corner.x, h, corner.y, 0, 1, 0, colour, corner.x / 7, corner.y / 7);
         for (const [i, j, k] of THREE.ShapeUtils.triangulateShape(corners, [])) {
           // A triangle is only visible from the side where its corners go
           // anticlockwise. Make sure every roof triangle faces up.
           const a = corners[i], b = corners[j], c = corners[k];
           const facesUp = (b.y - a.y) * (c.x - a.x) - (b.x - a.x) * (c.y - a.y) > 0;
-          indices.push(first + i, first + (facesUp ? j : k), first + (facesUp ? k : j));
+          flatRoofs.triangle(first + i, first + (facesUp ? j : k), first + (facesUp ? k : j));
         }
       }
 
       this.addToCells(building);
     });
 
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-    geometry.setAttribute("normal", new THREE.Float32BufferAttribute(normals, 3));
-    geometry.setAttribute("color", new THREE.Float32BufferAttribute(colours, 3));
-    geometry.setIndex(indices);
-    this.mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 }));
-    this.mesh.castShadow = true;
-    this.mesh.receiveShadow = true;
+    this.mesh.add(walls.build(wallTexture(), 0.9), tileRoofs.build(tileTexture(), 0.8), flatRoofs.build(concreteTexture(), 1));
   }
 
   /** Is this spot inside a building? */

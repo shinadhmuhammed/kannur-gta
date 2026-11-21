@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { RibbonBuilder } from "./ribbon";
+import { asphaltTexture, groundTexture } from "./textures";
 
 // Turns the saved OpenStreetMap roads (public/kannur-roads.json, made by
 // scripts/fetch-map.mjs) into 3D road surfaces, and answers two questions
@@ -33,6 +34,7 @@ export interface Spawn {
   x: number;
   z: number;
   heading: number;
+  roadWidth: number; // how wide the road is there, for parking beside it
 }
 
 const MAIN_KINDS = new Set(["trunk", "trunk_link", "primary", "primary_link", "secondary", "secondary_link"]);
@@ -40,8 +42,8 @@ const MAIN_KINDS = new Set(["trunk", "trunk_link", "primary", "primary_link", "s
 // Colours. Kerala's soil is red laterite, so road edges and dirt tracks are
 // that rusty brown, not grey.
 const LATERITE = 0xa4673f;
-const ASPHALT_MAIN = 0x3b3e46;
-const ASPHALT_SMALL = 0x54575e;
+const ASPHALT_MAIN = 0x4a4744; // warm dark grey: old tarmac is not blue-black
+const ASPHALT_SMALL = 0x625f5a;
 const CONCRETE = 0x8f908c;
 const PAVERS = 0x9c9087; // interlocking paving stones
 const FOOTPATH = 0xb8a88e;
@@ -118,16 +120,18 @@ export class Roads {
       footpaths.addRibbon(p, path.kind === "track" ? 3 : 2, 0.02);
     }
 
-    this.group.add(shoulders.build(LATERITE, 4), footpaths.build(FOOTPATH, 5));
+    const asphalt = asphaltTexture();
+    const earth = groundTexture();
+    this.group.add(shoulders.build(LATERITE, 4, earth), footpaths.build(FOOTPATH, 5, earth));
     for (const [colour, builder] of surfaces) {
-      this.group.add(builder.build(colour, colour === ASPHALT_MAIN ? 7 : 6));
+      this.group.add(builder.build(colour, colour === ASPHALT_MAIN ? 7 : 6, colour === LATERITE ? earth : asphalt));
     }
     this.group.add(paint.build(PAINT, 8));
   }
 
   /** Start on the big road closest to the middle of the map, facing along it. */
   findSpawn(): Spawn {
-    let best: Spawn = { x: 0, z: 0, heading: 0 };
+    let best: Spawn = { x: 0, z: 0, heading: 0, roadWidth: 6 };
     let bestDist = Infinity;
     for (const road of this.data.roads) {
       if (!MAIN_KINDS.has(road.kind)) continue;
@@ -138,7 +142,7 @@ export class Roads {
           bestDist = dist;
           // atan2 turns a direction (dx, dz) back into an angle, the opposite
           // of the sin/cos in car.ts.
-          best = { x: p[i], z: p[i + 1], heading: Math.atan2(p[i + 2] - p[i], p[i + 3] - p[i + 1]) };
+          best = { x: p[i], z: p[i + 1], heading: Math.atan2(p[i + 2] - p[i], p[i + 3] - p[i + 1]), roadWidth: road.width };
         }
       }
     }

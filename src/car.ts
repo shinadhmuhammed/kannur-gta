@@ -1,50 +1,79 @@
 import * as THREE from "three";
 import type { Controls } from "./input";
-import { buildBus } from "./vehicleModels";
+import { type VehicleModel, buildBike, buildBus, buildCar } from "./vehicleModels";
 
-// The vehicle you drive. It started as a car and is now a bus; the class kept
-// its name, since everything here works for any vehicle.
+// A vehicle you can drive: the bus, the car or the motorbike. (The class is
+// called Car because the game started with only a car.)
 //
 // Units: 1 unit = 1 metre, speed is metres per second, angles are radians.
-// These numbers are the "feel" of the bus: heavier than a car, so it picks up
-// speed slowly, takes longer to stop and turns in a wider curve. Change them
-// and see what happens.
-const MAX_SPEED = 22; // about 80 km/h
-const MAX_REVERSE = 5;
-const ENGINE = 6; // acceleration, m/s²
-const BRAKE = 18;
-const HANDBRAKE = 26;
-const DRAG = 3; // slows the bus when no key is pressed
-const TURN_RATE = 1.25; // radians per second at full grip
-const COLOUR = 0xe85d04; // orange, so you can tell it from the traffic buses
+
+/** What makes one vehicle different from another. */
+export interface VehicleSpec {
+  /** Shown in the hint: "E  drive the car". */
+  name: string;
+  verb: "drive" | "ride";
+  model: () => VehicleModel;
+  // The "feel". Change these numbers and see what happens.
+  maxSpeed: number; // m/s
+  maxReverse: number;
+  engine: number; // acceleration, m/s²
+  brake: number;
+  handbrake: number;
+  drag: number; // slows it when no key is pressed
+  turnRate: number; // radians per second at full grip
+  /** A bike leans into turns and you sit on it in the open. */
+  isBike: boolean;
+}
+
+// A bus is heavy: slow to speed up, slow to stop, wide turns. A car is the
+// all-rounder. A bike is the quickest off the line and the most nimble, and
+// it fits down lanes the bus cannot.
+export const BUS: VehicleSpec = {
+  name: "the bus", verb: "drive", model: () => buildBus(0xe85d04),
+  maxSpeed: 22, maxReverse: 5, engine: 6, brake: 18, handbrake: 26, drag: 3, turnRate: 1.25, isBike: false,
+};
+export const CAR: VehicleSpec = {
+  name: "the car", verb: "drive", model: () => buildCar("sedan-sports"),
+  maxSpeed: 32, maxReverse: 8, engine: 11, brake: 28, handbrake: 40, drag: 4, turnRate: 2.1, isBike: false,
+};
+export const BIKE: VehicleSpec = {
+  name: "the bike", verb: "ride", model: () => buildBike(0xc62828, false),
+  maxSpeed: 30, maxReverse: 2, engine: 14, brake: 24, handbrake: 30, drag: 3.5, turnRate: 2.7, isBike: true,
+};
 
 export class Car {
   /** The 3D object. Its position and rotation are what the player sees. */
   readonly mesh = new THREE.Group();
   /** Signed speed: positive = forward, negative = reverse. */
   speed = 0;
-  /** Direction the car points, as an angle around the up (Y) axis. */
+  /** Direction it points, as an angle around the up (Y) axis. */
   heading = 0;
+  /** How far a bike is tipped over, in radians (positive = to its left). */
+  lean = 0;
 
   /** Size on the ground, in metres. */
   readonly width: number;
   readonly length: number;
 
+  private readonly body: THREE.Group;
   private readonly frontWheels: THREE.Object3D[];
 
   /**
-   * @param spawn where the car starts, and where R puts it back
+   * @param spec which vehicle this is
+   * @param spawn where it starts, and where R puts it back
    * @param mapHalfWidth,mapHalfDepth the edge of the map; it cannot leave it
    */
   constructor(
+    readonly spec: VehicleSpec,
     private readonly spawn: { x: number; z: number; heading: number },
     private readonly mapHalfWidth: number,
     private readonly mapHalfDepth: number,
   ) {
-    // The shape lives in vehicleModels.ts, shared with traffic. To drive a
-    // car again, change buildBus(COLOUR) to buildCar(COLOUR): the size-based
-    // code below (collisions, doors, camera) adapts by itself.
-    const model = buildBus(COLOUR);
+    // The shapes live in vehicleModels.ts, shared with traffic. Everything
+    // below (collisions, doors, camera) works from the model's size, so any
+    // model can be dropped in.
+    const model = spec.model();
+    this.body = model.group;
     this.mesh.add(model.group);
     this.frontWheels = model.frontWheels;
     this.width = model.width;
@@ -60,29 +89,30 @@ export class Car {
   }
 
   /**
-   * Move the car forward in time by `dt` seconds.
+   * Move the vehicle forward in time by `dt` seconds.
    * @param blocked answers "is there something solid at this spot?"
    */
   update(dt: number, c: Controls, blocked: (x: number, z: number) => boolean): void {
+    const s = this.spec;
     if (c.reset) this.toSpawn();
 
     // --- Speed ---------------------------------------------------------
     // Pressing against the direction of travel brakes; otherwise it drives.
     if (c.throttle !== 0) {
       const braking = this.speed !== 0 && Math.sign(c.throttle) !== Math.sign(this.speed);
-      this.speed += c.throttle * (braking ? BRAKE : ENGINE) * dt;
+      this.speed += c.throttle * (braking ? s.brake : s.engine) * dt;
     } else {
-      this.speed = towardsZero(this.speed, DRAG * dt);
+      this.speed = towardsZero(this.speed, s.drag * dt);
     }
-    if (c.handbrake) this.speed = towardsZero(this.speed, HANDBRAKE * dt);
-    this.speed = THREE.MathUtils.clamp(this.speed, -MAX_REVERSE, MAX_SPEED);
+    if (c.handbrake) this.speed = towardsZero(this.speed, s.handbrake * dt);
+    this.speed = THREE.MathUtils.clamp(this.speed, -s.maxReverse, s.maxSpeed);
 
     // --- Steering ------------------------------------------------------
-    // A real car cannot turn while standing still, so the turn rate grows
-    // with speed (up to 8 m/s). Multiplying by the sign of the speed makes
-    // steering flip in reverse, like a real car.
+    // A real vehicle cannot turn while standing still, so the turn rate
+    // grows with speed (up to 8 m/s). Multiplying by the sign of the speed
+    // makes steering flip in reverse, like a real car.
     const grip = Math.min(Math.abs(this.speed) / 8, 1);
-    const heading = this.heading + c.steer * TURN_RATE * grip * Math.sign(this.speed) * dt;
+    const heading = this.heading + c.steer * s.turnRate * grip * Math.sign(this.speed) * dt;
 
     // --- Position ------------------------------------------------------
     // heading 0 points along +Z. sin/cos turn the angle into a direction.
@@ -111,11 +141,21 @@ export class Car {
 
     this.mesh.rotation.y = this.heading;
     for (const w of this.frontWheels) w.rotation.y = c.steer * 0.45;
+
+    // --- Lean (bikes only) -------------------------------------------------
+    // A bike tips into the turn, more the faster it goes. It eases towards
+    // the wanted angle so it rolls over smoothly. Turning the body around
+    // its length (the z axis) by a negative angle tips it to the left.
+    if (s.isBike) {
+      const wanted = c.steer * Math.min(Math.abs(this.speed) / 14, 1) * 0.5;
+      this.lean += (wanted - this.lean) * (1 - Math.exp(-8 * dt));
+      this.body.rotation.z = -this.lean;
+    }
   }
 
   /**
-   * Turn a spot given relative to the car ("1.9 m to its right") into a spot
-   * in the world. `side` is metres to the car's left (negative = right),
+   * Turn a spot given relative to the vehicle ("1.9 m to its right") into a
+   * spot in the world. `side` is metres to its left (negative = right),
    * `along` is metres towards its front (negative = behind).
    */
   spotBeside(side: number, along: number): { x: number; z: number } {
@@ -132,7 +172,7 @@ export class Car {
   doorSpots(): { x: number; z: number }[] {
     const beside = this.width / 2 + 0.9;
     return [
-      this.spotBeside(beside, this.length / 4), // left, at the front door
+      this.spotBeside(beside, this.length / 4), // left, towards the front
       this.spotBeside(-beside, this.length / 4), // right
       this.spotBeside(0, -(this.length / 2 + 1)), // behind
     ];

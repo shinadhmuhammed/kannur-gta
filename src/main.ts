@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { Car } from "./car";
+import { BIKE, BUS, CAR, Car } from "./car";
 import { Ground } from "./ground";
 import { type Controls, readControls } from "./input";
 import { Buildings, type BuildingData } from "./buildings";
@@ -7,11 +7,13 @@ import { Labels } from "./labels";
 import { Land, type LandData } from "./land";
 import { loadJson } from "./mapData";
 import { Minimap } from "./minimap";
+import { Pedestrians } from "./pedestrians";
 import { type PlaceData, Places } from "./places";
 import { Player } from "./player";
 import { Roads, type RoadData } from "./roads";
 import { Traffic } from "./traffic";
 import { Trees } from "./trees";
+import { loadVehicleModels } from "./vehicleModels";
 import { SUN_OFFSET, buildWorld } from "./world";
 
 // --- Setup: renderer (draws), scene (holds objects), camera (the eye) -----
@@ -23,55 +25,107 @@ document.body.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 900);
 
-// The map is four files, so they have to be loaded before anything can be
-// built. Promise.all downloads them at the same time instead of one by one.
+// The map is four files, and the car models are more files. They all have to
+// be loaded before anything can be built. Promise.all downloads them at the same time instead of one by one.
 // (`await` at the top of a module is allowed; the rest of the file waits.)
 const [roadData, buildingData, landData, placeData] = await Promise.all([
   loadJson<RoadData>("kannur-roads.json"),
   loadJson<BuildingData>("kannur-buildings.json"),
   loadJson<LandData>("kannur-land.json"),
   loadJson<PlaceData>("kannur-places.json"),
+  loadVehicleModels(),
 ]);
-const world = buildWorld(scene, roadData.halfWidth, roadData.halfDepth);
+const world = buildWorld(scene, renderer, roadData.halfWidth, roadData.halfDepth);
 const land = new Land(landData);
 const roads = new Roads(roadData);
 const buildings = new Buildings(buildingData);
 const traffic = new Traffic(roadData);
+const pedestrians = new Pedestrians(roadData, placeData, (x, z) => buildings.hits(x, z));
 const places = new Places(placeData);
 const labels = new Labels(placeData);
 const ground = new Ground(buildingData, roadData.halfWidth, roadData.halfDepth);
 const trees = new Trees(roadData, landData.rails, buildings, land, ground);
-scene.add(ground.mesh, labels.group, trees.group);
+scene.add(ground.mesh, labels.group, trees.group, pedestrians.group);
 const minimap = new Minimap(document.querySelector<HTMLCanvasElement>("#minimap")!, roadData, landData, buildingData);
 scene.add(land.group, roads.group, buildings.mesh, traffic.group);
 
-// What the car cannot drive through.
-const blocked = (x: number, z: number) => buildings.hits(x, z) || land.inWater(x, z) || traffic.hits(x, z);
+// --- Your vehicles -----------------------------------------------------------
+// You start in the bus. A car and a motorbike are parked at the roadside
+// near it. Walk up to any of them and press E to take it.
+const spawn = roads.findSpawn();
+const bus = new Car(BUS, spawn, roadData.halfWidth, roadData.halfDepth);
 
-const car = new Car(roads.findSpawn(), roadData.halfWidth, roadData.halfDepth);
+const solidWorld = (x: number, z: number) => buildings.hits(x, z) || land.inWater(x, z);
+
+/** A free spot on the road's edge near the bus, out of the way of traffic. */
+function parkingSpot(taken: { x: number; z: number }[]): { x: number; z: number; heading: number } {
+  const edge = spawn.roadWidth / 2 + 1.3;
+  // Try further and further from the bus, behind it and in front, both sides.
+  for (let along = 9; along < 80; along += 6) {
+    for (const [side, a] of [[edge, -along], [-edge, -along], [edge, along], [-edge, along]]) {
+      const spot = bus.spotBeside(side, a);
+      const free = [-2, 0, 2].every((d) => {
+        const p = bus.spotBeside(side, a + d);
+        return !solidWorld(p.x, p.z);
+      });
+      if (free && taken.every((t) => Math.hypot(t.x - spot.x, t.z - spot.z) > 5)) {
+        return { ...spot, heading: spawn.heading };
+      }
+    }
+  }
+  return { ...bus.spotBeside(0, -12), heading: spawn.heading }; // nowhere free: behind the bus
+}
+const carSpot = parkingSpot([]);
+const bikeSpot = parkingSpot([carSpot]);
+const vehicles = [
+  bus,
+  new Car(CAR, carSpot, roadData.halfWidth, roadData.halfDepth),
+  new Car(BIKE, bikeSpot, roadData.halfWidth, roadData.halfDepth),
+];
+/** The vehicle you are in, or the last one you were in. */
+let car = bus;
+
 const player = new Player();
-scene.add(car.mesh, player.mesh);
+scene.add(player.mesh, ...vehicles.map((v) => v.mesh));
 
-// --- In the car or on foot ---------------------------------------------------
+// What a vehicle cannot drive through: the world, traffic, and your other
+// parked vehicles.
+const blockedFor = (self: Car) => (x: number, z: number) =>
+  solidWorld(x, z) || traffic.hits(x, z) || vehicles.some((v) => v !== self && v.contains(x, z));
+
+// --- In a vehicle or on foot -------------------------------------------------
 // The whole game is in one of two "modes". Each frame, the mode decides who
 // gets the keyboard, who the camera follows and what E does.
 let onFoot = false;
 
-// What the car gets while nobody is driving it: nothing pressed, handbrake on.
+// What a vehicle gets while nobody is driving it: nothing pressed, handbrake on.
 const PARKED: Controls = { throttle: 0, steer: 0, handbrake: true, reset: false, run: false, enter: false };
 
-// The player cannot walk through the world or through the parked car.
-const blockedOnFoot = (x: number, z: number) => blocked(x, z) || car.contains(x, z);
+// The player cannot walk through the world, traffic or any parked vehicle.
+const blockedOnFoot = (x: number, z: number) =>
+  solidWorld(x, z) || traffic.hits(x, z) || vehicles.some((v) => v.contains(x, z));
 
-const EXIT_SPEED = 3; // m/s. You cannot jump out of a moving bus (yet).
-const DOOR_REACH = car.length / 2 + 2; // metres from its middle. How close you must be to get in.
+const EXIT_SPEED = 3; // m/s. You cannot jump out of a moving vehicle (yet).
 
-const nearCar = () => player.mesh.position.distanceTo(car.mesh.position) < DOOR_REACH;
+/** The vehicle close enough to get into, or null. Nearest one wins. */
+function vehicleInReach(): Car | null {
+  let best: Car | null = null;
+  let bestDist = Infinity;
+  for (const v of vehicles) {
+    const dist = player.mesh.position.distanceTo(v.mesh.position);
+    // Reach is measured from the vehicle's middle, so longer ones reach further.
+    if (dist < v.length / 2 + 2 && dist < bestDist) {
+      bestDist = dist;
+      best = v;
+    }
+  }
+  return best;
+}
 
 function getOut(): void {
-  // Try each door spot in turn. A spot is no good if a wall is there.
+  // Try each door spot in turn. A spot is no good if something is there.
   for (const spot of car.doorSpots()) {
-    if (blocked(spot.x, spot.z)) continue;
+    if (blockedOnFoot(spot.x, spot.z)) continue;
     player.placeAt(spot.x, spot.z, car.heading);
     player.mesh.visible = true;
     onFoot = true;
@@ -79,8 +133,10 @@ function getOut(): void {
   }
 }
 
-function getIn(): void {
-  player.mesh.visible = false;
+function getIn(vehicle: Car): void {
+  car = vehicle;
+  // Inside a car or bus you cannot be seen. On a bike you can.
+  player.mesh.visible = vehicle.spec.isBike;
   onFoot = false;
 }
 
@@ -142,27 +198,29 @@ function frame(now: number): void {
   const controls = readControls();
 
   // E switches mode, when that is possible right now.
-  const canGetOut = !onFoot && Math.abs(car.speed) < EXIT_SPEED;
-  const canGetIn = onFoot && nearCar();
-  if (controls.enter && canGetOut) getOut();
-  else if (controls.enter && canGetIn) getIn();
+  const reachable = onFoot ? vehicleInReach() : null;
+  if (controls.enter && !onFoot && Math.abs(car.speed) < EXIT_SPEED) getOut();
+  else if (controls.enter && reachable) getIn(reachable);
 
-  // The keyboard goes to the player on foot, otherwise to the car.
-  if (onFoot) {
-    car.update(dt, PARKED, blocked);
-    player.update(dt, controls, blockedOnFoot);
-  } else {
-    car.update(dt, controls, blocked);
-  }
+  // The keyboard goes to the player on foot, otherwise to the vehicle you
+  // are in. Every other vehicle stays parked.
+  for (const v of vehicles) v.update(dt, !onFoot && v === car ? controls : PARKED, blockedFor(v));
+  if (onFoot) player.update(dt, controls, blockedOnFoot);
+  else if (car.spec.isBike) player.rideOn(car.mesh.position.x, car.mesh.position.z, car.heading, car.lean);
+
   const active = onFoot ? player : car;
   const spot = active.mesh.position;
-  // Traffic lives around you, and stops for the car and for you on foot.
-  const carObstacle = { x: car.mesh.position.x, z: car.mesh.position.z, radius: car.length / 2 };
-  traffic.update(dt, spot, onFoot ? [carObstacle, { x: spot.x, z: spot.z, radius: 0.4 }] : [carObstacle]);
+  // Traffic lives around you, and stops for your vehicles and for you on foot.
+  const obstacles = vehicles.map((v) => ({ x: v.mesh.position.x, z: v.mesh.position.z, radius: v.length / 2 }));
+  if (onFoot) obstacles.push({ x: spot.x, z: spot.z, radius: 0.4 });
+  traffic.update(dt, spot, obstacles);
+  // People step back from your vehicles (parked or moving) and from traffic.
+  pedestrians.update(dt, spot, vehicles.map((v) => v.mesh.position));
   updateCamera(dt);
 
   speedLabel.textContent = String(Math.round(Math.abs(active.speed) * 3.6)); // m/s -> km/h
-  hintLabel.textContent = onFoot && nearCar() ? "E  get in" : "";
+  const inReach = onFoot ? vehicleInReach() : null;
+  hintLabel.textContent = inReach ? `E  ${inReach.spec.verb} ${inReach.spec.name}` : "";
 
   // Keep the sun (and its small shadow box) centred on you.
   world.sun.target.position.copy(spot);
@@ -184,5 +242,6 @@ function frame(now: number): void {
 }
 requestAnimationFrame(frame);
 
-// Lets you inspect things from the browser console while learning: `car.speed`
-Object.assign(window, { car, player, roads, buildings, land, traffic, places, labels, trees });
+// Lets you inspect things from the browser console while learning:
+// `game.car().speed`, `game.vehicles`
+Object.assign(window, { game: { car: () => car, vehicles, player, roads, buildings, land, traffic, places, labels, trees, pedestrians } });

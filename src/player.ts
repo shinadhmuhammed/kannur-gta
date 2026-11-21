@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import type { Controls } from "./input";
+import { buildPerson } from "./personModel";
 
 // The person you control when you are out of the car.
 
@@ -14,13 +15,17 @@ export class Player {
   /** Signed speed in m/s: positive = forward, negative = stepping back. */
   speed = 0;
 
-  private readonly legs: THREE.Object3D[] = [];
-  private readonly arms: THREE.Object3D[] = [];
+  private readonly legs: THREE.Object3D[];
+  private readonly arms: THREE.Object3D[];
   private stride = 0; // how far through the walking motion we are
 
   constructor() {
-    this.buildModel();
-    this.mesh.visible = false; // the game starts inside the car
+    // The shape lives in personModel.ts, shared with the people on the streets.
+    const model = buildPerson({ top: 0x1d6fb8, lower: 0x2b2d33 });
+    this.mesh.add(model.group);
+    this.legs = model.legs;
+    this.arms = model.arms;
+    this.mesh.visible = false; // the game starts inside the bus
   }
 
   /** Put the player at a spot, standing still. */
@@ -28,7 +33,8 @@ export class Player {
     this.mesh.position.set(x, 0, z);
     this.heading = heading;
     this.speed = 0;
-    this.mesh.rotation.y = heading;
+    this.mesh.rotation.set(0, heading, 0);
+    for (const limb of [...this.legs, ...this.arms]) limb.rotation.x = 0;
   }
 
   /**
@@ -63,6 +69,20 @@ export class Player {
     this.animate(dt);
   }
 
+  /**
+   * Sit on a bike: follow it, lean with it, knees bent and hands on the bars.
+   * Called every frame while riding, instead of update().
+   */
+  rideOn(x: number, z: number, heading: number, lean: number): void {
+    this.mesh.position.set(x, -0.12, z); // a little lower: sitting, not standing
+    this.heading = heading;
+    this.speed = 0;
+    // YXZ = turn to face the heading first, then tip over sideways.
+    this.mesh.rotation.set(0, heading, -lean, "YXZ");
+    for (const leg of this.legs) leg.rotation.x = -1.1;
+    for (const arm of this.arms) arm.rotation.x = -1.0;
+  }
+
   /** Swing the legs and arms while moving; ease back to standing when not. */
   private animate(dt: number): void {
     let swing: number;
@@ -78,40 +98,5 @@ export class Player {
     this.legs[1].rotation.x = -swing;
     this.arms[0].rotation.x = -swing * 0.8;
     this.arms[1].rotation.x = swing * 0.8;
-  }
-
-  /** A blocky person about 1.75 m tall. Front faces +Z. */
-  private buildModel(): void {
-    const skin = new THREE.MeshStandardMaterial({ color: 0xa9714b, roughness: 0.8 });
-    const shirt = new THREE.MeshStandardMaterial({ color: 0x1d6fb8, roughness: 0.8 });
-    const trousers = new THREE.MeshStandardMaterial({ color: 0x2b2d33, roughness: 0.9 });
-    const hair = new THREE.MeshStandardMaterial({ color: 0x15110e, roughness: 1 });
-
-    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.62, 0.26), shirt);
-    torso.position.y = 1.13;
-    const head = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.28, 0.26), skin);
-    head.position.y = 1.6;
-    const hairTop = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.08, 0.28), hair);
-    hairTop.position.y = 1.76;
-    this.mesh.add(torso, head, hairTop);
-
-    // A limb must swing from its top (hip or shoulder), not from its middle.
-    // So each limb is a box hanging below an empty "pivot", and we rotate
-    // the pivot.
-    const limb = (x: number, top: number, length: number, thick: number, m: THREE.Material): THREE.Object3D => {
-      const pivot = new THREE.Group();
-      pivot.position.set(x, top, 0);
-      const box = new THREE.Mesh(new THREE.BoxGeometry(thick, length, thick), m);
-      box.position.y = -length / 2;
-      pivot.add(box);
-      this.mesh.add(pivot);
-      return pivot;
-    };
-    this.legs.push(limb(0.13, 0.82, 0.82, 0.2, trousers), limb(-0.13, 0.82, 0.82, 0.2, trousers));
-    this.arms.push(limb(0.32, 1.42, 0.6, 0.13, skin), limb(-0.32, 1.42, 0.6, 0.13, skin));
-
-    this.mesh.traverse((o) => {
-      if (o instanceof THREE.Mesh) o.castShadow = true;
-    });
   }
 }

@@ -95,20 +95,28 @@ export class RibbonBuilder {
    *   card cannot tell which is on top, so they flicker ("z-fighting").
    *   polygonOffset tells it: "treat this one as slightly closer".
    */
-  build(colour: number, layer: number): THREE.Mesh {
+  build(colour: number, layer: number, texture?: THREE.Texture): THREE.Mesh {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute("position", new THREE.Float32BufferAttribute(this.positions, 3));
     geometry.setIndex(this.indices);
     geometry.computeVertexNormals(); // tells the light which way the surface faces
-    const mesh = new THREE.Mesh(geometry, flatMaterial(colour, layer));
+    if (texture) {
+      // Where each corner sits on the texture picture ("uv"). Using the
+      // corner's own map position, one picture per 5 metres, means the grain
+      // of two roads lines up where they meet, with no seam at junctions.
+      const uv: number[] = [];
+      for (let i = 0; i < this.positions.length; i += 3) uv.push(this.positions[i] / 5, this.positions[i + 2] / 5);
+      geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+    }
+    const mesh = new THREE.Mesh(geometry, flatMaterial(colour, layer, texture));
     mesh.receiveShadow = true;
     return mesh;
   }
 }
 
 /** A material for things lying flat on the ground. See `build` for `layer`. */
-export function flatMaterial(colour: number, layer: number): THREE.MeshStandardMaterial {
-  const material = new THREE.MeshStandardMaterial({ color: colour, roughness: 1 });
+export function flatMaterial(colour: number, layer: number, texture?: THREE.Texture): THREE.MeshStandardMaterial {
+  const material = new THREE.MeshStandardMaterial({ color: colour, roughness: 1, map: texture ?? null });
   material.polygonOffset = true;
   material.polygonOffsetFactor = -layer;
   material.polygonOffsetUnits = -layer;

@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import type { BuildingData } from "./buildings";
+import { groundTexture } from "./textures";
 
 // The colour of the ground.
 //
@@ -14,7 +15,7 @@ import type { BuildingData } from "./buildings";
 
 const CELL = 30; // metres between grid corners
 const GREEN = new THREE.Color(0x86a05f);
-const TOWN = new THREE.Color(0xa69c8c);
+const TOWN = new THREE.Color(0xb3a186);
 
 export class Ground {
   readonly mesh: THREE.Mesh;
@@ -57,6 +58,7 @@ export class Ground {
     // --- The mesh ---------------------------------------------------------------
     const positions: number[] = [];
     const colours: number[] = [];
+    const uvs: number[] = [];
     const indices: number[] = [];
     const colour = new THREE.Color();
     for (let r = 0; r < this.rows; r++) {
@@ -64,6 +66,8 @@ export class Ground {
         positions.push(this.left + c * CELL, 0, this.top + r * CELL);
         colour.lerpColors(GREEN, TOWN, this.builtUp[r * this.columns + c]);
         colours.push(colour.r, colour.g, colour.b);
+        // One texture picture per 14 metres of ground.
+        uvs.push((this.left + c * CELL) / 14, (this.top + r * CELL) / 14);
         if (c < this.columns - 1 && r < this.rows - 1) {
           const a = r * this.columns + c; // this corner
           const b = a + this.columns; // the corner below it
@@ -74,9 +78,10 @@ export class Ground {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
     geometry.setAttribute("color", new THREE.Float32BufferAttribute(colours, 3));
+    geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
     geometry.setIndex(indices);
     geometry.computeVertexNormals();
-    this.mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1 }));
+    this.mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ vertexColors: true, map: groundTexture(), roughness: 1 }));
     this.mesh.receiveShadow = true;
   }
 

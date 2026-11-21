@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import type { RoadData } from "./roads";
-import { type VehicleModel, buildAuto, buildBus, buildCar } from "./vehicleModels";
+import { type CarKind, type VehicleModel, buildAuto, buildBike, buildBus, buildCar } from "./vehicleModels";
 
 // Traffic: cars, auto-rickshaws and buses that drive along the roads.
 //
@@ -19,7 +19,13 @@ const SPAWN_FAR = 260;
 const REMOVE_BEYOND = 380;
 const CELL = 100; // size of the squares used to find road points near a spot
 
-const CAR_COLOURS = [0xf5f5f5, 0xc9ccd1, 0x2f3e52, 0x8a1c1c, 0x3d6b4f, 0x1f4e9c, 0x6b6b6b];
+// Everyday cars are listed more than once so they turn up more often than
+// police cars and ambulances.
+const CAR_MIX: CarKind[] = [
+  "sedan", "sedan", "hatchback-sports", "hatchback-sports", "suv", "suv", "suv-luxury",
+  "van", "van", "taxi", "taxi", "truck", "delivery", "sedan-sports", "police", "ambulance",
+];
+const BIKE_COLOURS = [0x1c1c1c, 0xc62828, 0x1f4e9c, 0x8d9399];
 const BUS_COLOURS = [0xc0392b, 0x2e7d4f, 0x2a5db0];
 
 interface Vehicle {
@@ -298,8 +304,10 @@ export class Traffic {
     const pick = Math.random();
     // Buses only on roads wide enough for them.
     if (pick < 0.15 && roadWidth >= 7) return buildBus(randomOf(BUS_COLOURS));
-    if (pick < 0.5) return buildAuto();
-    return buildCar(randomOf(CAR_COLOURS));
+    if (pick < 0.35) return buildAuto();
+    // Kerala's roads are full of two-wheelers.
+    if (pick < 0.6) return buildBike(randomOf(BIKE_COLOURS), true);
+    return buildCar(randomOf(CAR_MIX));
   }
 }
 
