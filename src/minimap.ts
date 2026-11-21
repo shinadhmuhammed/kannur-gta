@@ -68,8 +68,11 @@ export class Minimap {
     for (const line of land.rails) stroke(line, "#555555", 2);
   }
 
-  /** Redraw the corner map around the player. */
-  update(x: number, z: number, heading: number): void {
+  /**
+   * Redraw the corner map around the player.
+   * @param target a place to mark, such as the next bus stop
+   */
+  update(x: number, z: number, heading: number, target: { x: number; z: number } | null = null): void {
     const s = this.screen;
     const size = this.canvas.width;
     s.fillStyle = "#8ec5e8"; // shows beyond the edge of the painted map
@@ -80,6 +83,28 @@ export class Minimap {
     const top = (z - VIEW + this.half) * this.scale;
     const span = VIEW * 2 * this.scale;
     s.drawImage(this.whole, left, top, span, span, 0, 0, size, size);
+
+    if (target) {
+      // Where the target is on the little map, measured from its middle.
+      const pixelsPerMetre = size / (VIEW * 2);
+      let tx = (target.x - x) * pixelsPerMetre;
+      let ty = (target.z - z) * pixelsPerMetre;
+      // If it is off the map, pin the dot to the rim in its direction, so
+      // you still know which way to drive.
+      const rim = size / 2 - 14;
+      const far = Math.hypot(tx, ty);
+      if (far > rim) {
+        tx *= rim / far;
+        ty *= rim / far;
+      }
+      s.beginPath();
+      s.arc(size / 2 + tx, size / 2 + ty, 11, 0, Math.PI * 2);
+      s.fillStyle = "#ffd23f";
+      s.strokeStyle = "#1b2a4a";
+      s.lineWidth = 4;
+      s.fill();
+      s.stroke();
+    }
 
     // The player: an arrow in the middle, turned to face the way they face.
     s.save();

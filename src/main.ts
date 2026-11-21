@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { BusDuty } from "./busDuty";
 import { BIKE, BUS, CAR, Car } from "./car";
 import { Ground } from "./ground";
 import { type Controls, readControls } from "./input";
@@ -99,7 +100,13 @@ const blockedFor = (self: Car) => (x: number, z: number) =>
 let onFoot = false;
 
 // What a vehicle gets while nobody is driving it: nothing pressed, handbrake on.
-const PARKED: Controls = { throttle: 0, steer: 0, handbrake: true, reset: false, run: false, enter: false };
+const PARKED: Controls = { throttle: 0, steer: 0, handbrake: true, reset: false, run: false, enter: false, duty: false };
+
+// --- Bus duty ------------------------------------------------------------------
+// The rules live in busDuty.ts. Here we only feed it the bus's position and
+// show what it reports.
+const duty = new BusDuty(roadData, placeData, spawn.x, spawn.z);
+scene.add(duty.beacon);
 
 // The player cannot walk through the world, traffic or any parked vehicle.
 const blockedOnFoot = (x: number, z: number) =>
@@ -184,6 +191,8 @@ const speedLabel = document.getElementById("speed")!;
 const roadLabel = document.getElementById("road")!;
 const hintLabel = document.getElementById("hint")!;
 const placeLabel = document.getElementById("place")!;
+const dutyPanel = document.getElementById("duty")!;
+let dutyShown = ""; // what the panel shows now, to avoid rewriting it every frame
 document.getElementById("credit")!.textContent = roadData.credit;
 let last = performance.now();
 let roadCheckIn = 0; // seconds until we next look up the road name
@@ -219,8 +228,26 @@ function frame(now: number): void {
   updateCamera(dt);
 
   speedLabel.textContent = String(Math.round(Math.abs(active.speed) * 3.6)); // m/s -> km/h
+  // --- Bus duty: B starts or ends it, but only from the driver's seat --------
+  const inBus = !onFoot && car === bus;
+  if (controls.duty && inBus) duty.toggle();
+  duty.update(dt, bus.mesh.position.x, bus.mesh.position.z, bus.speed, inBus, (stop) => {
+    // Everyone waiting gets on, so the stop is empty for the next minute.
+    pedestrians.emptyStop(stop.x, stop.z, 60);
+  });
+  const dutyView = duty.view(bus.mesh.position.x, bus.mesh.position.z);
+  const dutyHtml = dutyView.lines.map((line) => `<div>${line}</div>`).join("");
+  if (dutyHtml !== dutyShown) {
+    dutyPanel.innerHTML = dutyHtml;
+    dutyShown = dutyHtml;
+  }
+
   const inReach = onFoot ? vehicleInReach() : null;
-  hintLabel.textContent = inReach ? `E  ${inReach.spec.verb} ${inReach.spec.name}` : "";
+  hintLabel.textContent = inReach
+    ? `E  ${inReach.spec.verb} ${inReach.spec.name}`
+    : inBus && dutyView.lines.length === 0 && Math.abs(bus.speed) < 1
+      ? "B  start bus duty"
+      : "";
 
   // Keep the sun (and its small shadow box) centred on you.
   world.sun.target.position.copy(spot);
@@ -235,7 +262,7 @@ function frame(now: number): void {
     placeLabel.textContent = near ? `Near ${near.name}` : "";
     labels.update(spot.x, spot.z);
   }
-  minimap.update(spot.x, spot.z, active.heading);
+  minimap.update(spot.x, spot.z, active.heading, dutyView.target);
 
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
@@ -244,4 +271,4 @@ requestAnimationFrame(frame);
 
 // Lets you inspect things from the browser console while learning:
 // `game.car().speed`, `game.vehicles`
-Object.assign(window, { game: { car: () => car, vehicles, player, roads, buildings, land, traffic, places, labels, trees, pedestrians } });
+Object.assign(window, { game: { car: () => car, vehicles, player, roads, buildings, land, traffic, places, labels, trees, pedestrians, duty } });

@@ -31,6 +31,7 @@ export interface Controls {
   reset: boolean;
   run: boolean; // Shift, on foot
   enter: boolean; // E was pressed this frame: get in or out of the car
+  duty: boolean; // B was pressed this frame: start or end bus duty
 }
 
 export function readControls(): Controls {
@@ -39,6 +40,7 @@ export function readControls(): Controls {
   const left = any("KeyA", "ArrowLeft") ? 1 : 0;
   const right = any("KeyD", "ArrowRight") ? 1 : 0;
   const enter = justPressed.has("KeyE");
+  const duty = justPressed.has("KeyB");
   justPressed.clear(); // each press is reported in exactly one frame
   return {
     throttle: forward - back,
@@ -47,5 +49,6 @@ export function readControls(): Controls {
     reset: down.has("KeyR"),
     run: any("ShiftLeft", "ShiftRight"),
     enter,
+    duty,
   };
 }

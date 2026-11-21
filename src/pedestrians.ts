@@ -47,6 +47,7 @@ export class Pedestrians {
   private readonly junctions = new Map<string, [road: number, point: number][]>();
   private readonly cells = new Map<string, [road: number, point: number][]>();
   private readonly random = seededRandom(402);
+  private clock = 0; // seconds since the game started
 
   /** @param solid answers "is there a wall at this spot?" */
   constructor(roads: RoadData, places: PlaceData, private readonly solid: (x: number, z: number) => boolean) {
@@ -105,8 +106,20 @@ export class Pedestrians {
 
     for (const w of this.walkers) this.walk(w, dt, dangers);
 
+    this.clock += dt;
     for (const crowd of this.waiting) {
-      crowd.visible = Math.hypot(crowd.position.x - focus.x, crowd.position.z - focus.z) < SHOW_WAITING_WITHIN;
+      const near = Math.hypot(crowd.position.x - focus.x, crowd.position.z - focus.z) < SHOW_WAITING_WITHIN;
+      crowd.visible = near && this.clock >= (crowd.userData.emptyUntil ?? 0);
+    }
+  }
+
+  /**
+   * The bus has picked everyone up: hide the people waiting near this spot
+   * for a while, until "new" passengers have gathered.
+   */
+  emptyStop(x: number, z: number, seconds: number): void {
+    for (const crowd of this.waiting) {
+      if (Math.hypot(crowd.position.x - x, crowd.position.z - z) < 60) crowd.userData.emptyUntil = this.clock + seconds;
     }
   }
 
